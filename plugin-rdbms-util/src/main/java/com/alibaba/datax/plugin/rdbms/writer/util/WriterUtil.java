@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public final class WriterUtil {
     private static final Logger LOG = LoggerFactory.getLogger(WriterUtil.class);
@@ -120,22 +121,23 @@ public final class WriterUtil {
         // && writeMode.trim().toLowerCase().startsWith("replace")
         String writeDataSqlTemplate;
         if (forceUseUpdate ||
-                ((dataBaseType == DataBaseType.MySql || dataBaseType == DataBaseType.Tddl) && writeMode.trim().toLowerCase().startsWith("update"))
+                ((dataBaseType == DataBaseType.MySql || dataBaseType == DataBaseType.Tddl || dataBaseType == DataBaseType.Oracle ) && writeMode.trim().toLowerCase().startsWith("update"))
                 ) {
-            //update只在mysql下使用
+            //update只在mysql下使用,TODO 追加oracle
 
-            writeDataSqlTemplate = new StringBuilder()
-                    .append("INSERT INTO %s (").append(StringUtils.join(columnHolders, ","))
-                    .append(") VALUES(").append(StringUtils.join(valueHolders, ","))
-                    .append(")")
-                    .append(onDuplicateKeyUpdateString(columnHolders))
-                    .toString();
+            writeDataSqlTemplate = upsertString(dataBaseType,writeMode, columnHolders,valueHolders);
+
+
+
         } else {
 
             //这里是保护,如果其他错误的使用了update,需要更换为replace
-            if (writeMode.trim().toLowerCase().startsWith("update")) {
+
+            if (writeMode.trim().toLowerCase().startsWith("update") ) {
                 writeMode = "replace";
             }
+
+
             writeDataSqlTemplate = new StringBuilder().append(writeMode)
                     .append(" INTO %s (").append(StringUtils.join(columnHolders, ","))
                     .append(") VALUES(").append(StringUtils.join(valueHolders, ","))
@@ -144,6 +146,98 @@ public final class WriterUtil {
 
         return writeDataSqlTemplate;
     }
+
+    //TODO 根据不同数据库类型返回upsert子句
+    private static String upsertString(DataBaseType dataBaseType,String writeMode,List<String> columnHolders,List<String> valueHolders) {
+
+        // dataBaseType == mysql / oracle
+        String writeDataSqlTemplate;
+        if(dataBaseType == DataBaseType.Oracle) {
+            // oracle update("id,ccid")  ==>  NEW.ID = OLD.ID AND NEW.CCID = OLD.CCID
+            //
+            if(!writeMode.startsWith("update('")) {
+                throw DataXException.asDataXException(DBUtilErrorCode.ILLEGAL_VALUE,
+                    String.format("您所配置的 writeMode:%s 错误. 因为DataX 目前oracle的update模式需要携带主键update('id,name'). 请检查您的配置并作出修改.", writeMode));
+            }
+
+
+            writeDataSqlTemplate = new StringBuilder().append(onMergeIntoDoString(writeMode, columnHolders, valueHolders)).append("INSERT (")
+                    .append(StringUtils.join(columnHolders, ","))
+                    .append(") VALUES(").
+                        append(StringUtils.join(valueHolders, ","))
+                    .append(")").toString();
+            LOG.info("writeDataSqlTemplate {}",writeDataSqlTemplate);
+
+        } else {
+            writeDataSqlTemplate = new StringBuilder()
+                    .append("INSERT INTO %s (").append(StringUtils.join(columnHolders, ","))
+                    .append(") VALUES(").append(StringUtils.join(valueHolders, ","))
+                    .append(")")
+                    .append(onDuplicateKeyUpdateString(columnHolders))
+                    .toString();
+        }
+
+        return writeDataSqlTemplate;
+    }
+
+
+    public static String onMergeIntoDoString(String writeMode, List<String> columnHolders, List<String> valueHolders) {
+        String[] sArray = writeMode.split("'")[1].split(",");
+        LOG.info(WriterUtil.class.getName() + "#onMergeIntoDoString : ids {}",sArray);
+        StringBuilder sb = new StringBuilder();
+        sb.append("MERGE INTO %s A USING ( SELECT ");
+
+        boolean first = true;
+        boolean first1 = true;
+        StringBuilder str = new StringBuilder();
+        StringBuilder update = new StringBuilder();
+        for (String columnHolder : columnHolders) {
+
+            columnHolder = columnHolder.replace("\"","");
+            LOG.info(WriterUtil.class.getName() + "#onMergeIntoDoString : columnHolder {}",columnHolder);
+            if (Arrays.asList(sArray).contains(columnHolder)) {
+                LOG.info(WriterUtil.class.getName() + "#onMergeIntoDoString :replace columnHolder {}",columnHolder);
+                if (!first) {
+                    sb.append(",");
+                    str.append(" AND ");
+                } else {
+                    first = false;
+                }
+                LOG.info("column : {}", columnHolder);
+                str.append("TMP.").append(columnHolder.replace("\"",""));
+                sb.append("?");
+                str.append(" = ");
+                sb.append(" AS ");
+                str.append("A.").append(columnHolder.replace("\"",""));
+                sb.append(columnHolder);
+            }
+        }
+
+        for (String columnHolder : columnHolders) {
+            columnHolder = columnHolder.replace("\"","");
+            if (!Arrays.asList(sArray).contains(columnHolder)) {
+                if (!first1) {
+                    update.append(",");
+                } else {
+                    first1 = false;
+                }
+                if(!Arrays.asList(sArray).contains(columnHolder)) {
+                    update.append(columnHolder);
+                    update.append(" = ");
+                    update.append("?");
+                }
+
+            }
+        }
+
+        sb.append(" FROM DUAL ) TMP ON (");
+        sb.append(str);
+        sb.append(" ) WHEN MATCHED THEN UPDATE SET ");
+        sb.append(update);
+        sb.append(" WHEN NOT MATCHED THEN ");
+        return sb.toString();
+    }
+
 
     public static String onDuplicateKeyUpdateString(List<String> columnHolders){
         if (columnHolders == null || columnHolders.size() < 1) {

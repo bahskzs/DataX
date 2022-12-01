@@ -22,6 +22,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class CommonRdbmsWriter {
@@ -261,10 +262,37 @@ public class CommonRdbmsWriter {
 
         public void startWriteWithConnection(RecordReceiver recordReceiver, TaskPluginCollector taskPluginCollector, Connection connection) {
             this.taskPluginCollector = taskPluginCollector;
+            List<String> columns = new ArrayList<>();
+            List<String> columnsOne = new ArrayList<>();
+            List<String> columnsTwo = new ArrayList<>();
+            if (this.dataBaseType == DataBaseType.Oracle) {
+                String[] sArray = writeMode.startsWith("update('") ? writeMode.split("'")[1].split(",") : writeMode.split("");
+                int size = this.columns.size();
+                int i = 0;
+                for (int j = 0; j < size; j++) {
+                    if (Arrays.asList(sArray).contains(this.columns.get(j))) {
+                        columnsOne.add(this.columns.get(j));
+                    }
+                }
+                for (int j = 0; j < size; j++) {
+                    if (!Arrays.asList(sArray).contains(this.columns.get(j))) {
+                        columnsTwo.add(this.columns.get(j));
+                    }
+                }
+                for (String column : columnsOne) {
+                    columns.add(i, column);
+                    i++;
+                }
+                for (String column : columnsTwo) {
+                    columns.add(i, column);
+                    i++;
+                }
+            }
+            columns.addAll(this.columns);
 
             // 用于写入数据的时候的类型根据目的表字段类型转换
             this.resultSetMetaData = DBUtil.getColumnMetaData(connection,
-                    this.table, StringUtils.join(this.columns, ","));
+                    this.table, StringUtils.join(columns, ","));
             // 写数据库的SQL语句
             calcWriteRecordSql();
 
@@ -273,7 +301,7 @@ public class CommonRdbmsWriter {
             try {
                 Record record;
                 while ((record = recordReceiver.getFromReader()) != null) {
-                    if (record.getColumnNumber() != this.columnNumber) {
+                    if (record.getColumnNumber() != this.columnNumber && this.dataBaseType != DataBaseType.Oracle) {
                         // 源头读取字段列数与目的表字段写入列数不相等，直接报错
                         throw DataXException
                                 .asDataXException(
@@ -349,10 +377,44 @@ public class CommonRdbmsWriter {
                 preparedStatement = connection
                         .prepareStatement(this.writeRecordSql);
 
-                for (Record record : buffer) {
-                    preparedStatement = fillPreparedStatement(
-                            preparedStatement, record);
-                    preparedStatement.addBatch();
+                if (this.dataBaseType == DataBaseType.Oracle) {
+                    String[] sArray = writeMode.startsWith("update('")  ? writeMode.split("'")[1].split(",") : writeMode.split("");
+
+                    //TODO
+                    LOG.info("doBatchInsert: sArray {}",sArray);
+
+                    for (Record record : buffer) {
+                        List<Column> recordOne = new ArrayList<>();
+                        for (int j = 0; j < this.columns.size(); j++) {
+                            LOG.info("doBatchInsert column : {}",this.columns.get(j).replace("\"",""));
+
+                            if (Arrays.asList(sArray).contains(this.columns.get(j).replace("\"",""))) {
+
+                                recordOne.add(record.getColumn(j));
+                            }
+                        }
+                        for (int j = 0; j < this.columns.size(); j++) {
+                            if (!Arrays.asList(sArray).contains(this.columns.get(j).replace("\"",""))) {
+                                recordOne.add(record.getColumn(j));
+                            }
+                        }
+                        for (int j = 0; j < this.columns.size(); j++) {
+                            recordOne.add(record.getColumn(j));
+                        }
+                        for (int j = 0; j < recordOne.size(); j++) {
+                            record.setColumn(j, recordOne.get(j));
+                        }
+
+                        preparedStatement = fillPreparedStatement(
+                                preparedStatement, record);
+                        preparedStatement.addBatch();
+                    }
+                } else {
+                    for (Record record : buffer) {
+                        preparedStatement = fillPreparedStatement(
+                                preparedStatement, record);
+                        preparedStatement.addBatch();
+                    }
                 }
                 preparedStatement.executeBatch();
                 connection.commit();
@@ -372,6 +434,7 @@ public class CommonRdbmsWriter {
             PreparedStatement preparedStatement = null;
             try {
                 connection.setAutoCommit(true);
+                LOG.info("doOneInsert : writeRecordSql {} ",this.writeRecordSql);
                 preparedStatement = connection
                         .prepareStatement(this.writeRecordSql);
 
@@ -379,6 +442,7 @@ public class CommonRdbmsWriter {
                     try {
                         preparedStatement = fillPreparedStatement(
                                 preparedStatement, record);
+
                         preparedStatement.execute();
                     } catch (SQLException e) {
                         LOG.debug(e.toString());
@@ -403,7 +467,9 @@ public class CommonRdbmsWriter {
             for (int i = 0; i < this.columnNumber; i++) {
                 int columnSqltype = this.resultSetMetaData.getMiddle().get(i);
                 String typeName = this.resultSetMetaData.getRight().get(i);
+                LOG.info("record columnIndex :{},{},{},{}",i,record.getColumn(i),columnSqltype,typeName);
                 preparedStatement = fillPreparedStatementColumnType(preparedStatement, i, columnSqltype, typeName, record.getColumn(i));
+                preparedStatement = fillPreparedStatementColumnType(preparedStatement, i+this.columnNumber, columnSqltype, typeName, record.getColumn(i));
             }
 
             return preparedStatement;
