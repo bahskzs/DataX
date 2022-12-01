@@ -422,10 +422,16 @@ public class JobContainer extends AbstractContainer {
         if (isByteLimit) {
             long globalLimitedByteSpeed = this.configuration.getInt(
                     CoreConstant.DATAX_JOB_SETTING_SPEED_BYTE, 10 * 1024 * 1024);
-
+            LOG.info("adjustChannelNumber : globalLimitedByteSpeed : {}",globalLimitedByteSpeed);
             // 在byte流控情况下，单个Channel流量最大值必须设置，否则报错！
             Long channelLimitedByteSpeed = this.configuration
                     .getLong(CoreConstant.DATAX_CORE_TRANSPORT_CHANNEL_SPEED_BYTE);
+
+            LOG.info("adjustChannelNumber : channelLimitedByteSpeed : {}",channelLimitedByteSpeed);
+
+            if(channelLimitedByteSpeed == null || channelLimitedByteSpeed <= 0 ) {
+                channelLimitedByteSpeed = globalLimitedByteSpeed;
+            }
             if (channelLimitedByteSpeed == null || channelLimitedByteSpeed <= 0) {
                 throw DataXException.asDataXException(
                         FrameworkErrorCode.CONFIG_ERROR,
