@@ -469,7 +469,10 @@ public class CommonRdbmsWriter {
                 String typeName = this.resultSetMetaData.getRight().get(i);
                 LOG.info("record columnIndex :{},{},{},{}",i,record.getColumn(i),columnSqltype,typeName);
                 preparedStatement = fillPreparedStatementColumnType(preparedStatement, i, columnSqltype, typeName, record.getColumn(i));
-                preparedStatement = fillPreparedStatementColumnType(preparedStatement, i+this.columnNumber, columnSqltype, typeName, record.getColumn(i));
+                if(writeMode.startsWith("update('") && dataBaseType == DataBaseType.Oracle) {
+                    preparedStatement = fillPreparedStatementColumnType(preparedStatement, i+this.columnNumber, columnSqltype, typeName, record.getColumn(i));
+
+                }
             }
 
             return preparedStatement;
